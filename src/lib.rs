@@ -10,9 +10,12 @@
 
 
 use std::any::Any;
+use std::default;
 use std::fmt::Display;
+use std::time::Instant;
 
 use pyo3::exceptions::PyTypeError;
+use pyo3::types::PyString;
 use pyo3::{ToPyObject, PyAny, PyErr};
 use pyo3::{types::{PyDict, PyModule}, PyResult, pymodule, Python, PyObject, exceptions::PyValueError,
 wrap_pyfunction, pyfunction};
@@ -79,16 +82,21 @@ pathsep (str, optional): Path separator for path parameter. Defaults to ".".
 */
 #[pyfunction]
 fn dictor(_py: Python, 
-    data: & PyDict,
+    data: & PyAny,
     path: String, 
-    default: Option<&PyAny>,
+    default: Option<String>,
     checknone: Option<bool>,
     ignorecase: Option<bool>,
-    pathsep: Option<String>
+    pathsep: Option<String>,
+    search: Option<String>
 ) -> PyResult<Option<PyObject>> {
     let mut inner_dict: &PyAny = data.try_into().unwrap();
     let input: Input;
     let ignorecase = ignorecase.unwrap_or(false);
+    let default_resp = PyString::new(_py, default.unwrap().as_str());
+    
+    // if search provided, a diff approach must be followed?
+
     if let Some(delimiter) = pathsep{
         input = Input::new(path, delimiter);
    
@@ -112,10 +120,14 @@ fn dictor(_py: Python,
             if let Some(key) = cased_key.first(){
                 arg = key.to_owned();
             }else{
-                return Ok(None);
+                if default_resp.is_empty().unwrap(){
+                    return Ok(None);
+                    
+                } else{
+                    return Ok(Some(default_resp.to_object(_py)));
+                }
             }
-
-            };
+        };
         if let Ok(num_arg) = arg.parse::<i32>(){
             inner_item  = inner_dict.get_item(num_arg);
             if inner_item.is_err(){
@@ -124,19 +136,33 @@ fn dictor(_py: Python,
         }
         else{
             inner_item = inner_dict.get_item(arg);
-        }
+        };
         
         if let Ok(item) = inner_item{
             inner_dict = item;
             
         }else{
-            return Ok(None);
-        }
+            // TODO: si pasa default usar default
+            if default_resp.is_empty().unwrap(){
+                return Ok(Some(default_resp.to_object(_py)));
+            } else{
+                return Ok(None);
+            }
+            
+        };
     }
-    // checknone: valido si es None y si debo tirar una exception
-    // aca chequear si hay default y si es None reemplazarlo
-
-    Ok(Some(inner_dict.to_object(_py)))
+    //TODO checknone: if None is found and `checknone`` set a PyErr must be raised
+    //TODO default: if None is found and `default` is set, a None result must be returned
+    // si hay search, usar search:
+    // search: itero en todo el dict/subdict haciendo una acumulacion de valores,
+    // py any termina siendo un vec de PyAny donde => PyNone, default, y PyAny 
+    // no puede devolver anidaciones, solo flat lists
+    if inner_dict.is_none(){
+        Ok(Some(default_resp.to_object(_py)))
+    }else {
+        Ok(Some(inner_dict.to_object(_py)))
+    }
+    
 }
 
 
@@ -155,47 +181,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entender_pyo3(){
+    fn test_int_as_string(){
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let dict = PyDict::new(py);
-            let dict2 = PyDict::new(py);
-            let dict3 = PyDict::new(py);
-            dict3.set_item("pito", vec![1,2,3]).unwrap();
-            dict2.set_item("pepe", dict3).unwrap();
-            dict.set_item("pepo", vec![6,7,8]).unwrap();
-            dict.set_item("pepo2", dict2).unwrap();
-            dbg!(dict.get_item(0));
-            let inner_dict: &PyAny = dict.try_into().unwrap();
-            let item = inner_dict.get_item("pepo").unwrap();
-            dbg!(item.get_item(0));
-            let other_item =  <PyList as PyTryFrom<'_>>::try_from(item).unwrap();
-            dbg!(other_item.get_item("0".parse().unwrap()));
+            dict.set_item("item", vec![1,2,3]).unwrap();
+            // test index out of range should be silenced
+            let res = dictor(
+                py, dict, "item.4".into(), 
+                None, None, 
+                None, None, None);
+            assert!(res.unwrap().is_none());
 
+            let dict2 = PyDict::new(py);
+            dict2.set_item("4", "found");
+            dict.set_item("other_item", dict2);
+            let res = dictor(
+                py, dict, "other_item.4".into(), 
+                None, None, 
+                None, None, None).unwrap();
+            assert_eq!(res.unwrap().to_string() , "found".to_string());
+
+         
         })
     }
-
-    // #[test]
-    // fn test_int_as_string(){
-    //     pyo3::prepare_freethreaded_python();
-    //     Python::with_gil(|py| {
-    //         let dict = PyDict::new(py);
-    //         dict.set_item("item", vec![1,2,3]).unwrap();
-    //         // test index out of range should be silenced
-    //         let res = dictor(py, dict, "item.4".into(), None);
-    //         assert!(res.unwrap().is_none());
-
-    //         let dict2 = PyDict::new(py);
-    //         dict2.set_item("4", "found");
-    //         dict.set_item("other_item", dict2);
-    //         let res = dictor(py, dict, "other_item.4".into(), None).unwrap();
-    //         // dbg!(res);
-    //         // test int treated as string if dict value is not list
-    //         assert_eq!(res.unwrap().to_string() , "found".to_string());
-               
-    //     })
         
-    // }
 
     #[test]
     fn test_cased_target(){
@@ -203,14 +213,59 @@ mod tests {
         Python::with_gil(|py| {
             let dict = PyDict::new(py);
             let dict2 = PyDict::new(py);
-                dict2.set_item("aLGO", "found");
-                dict.set_item("oTRo", dict2);
+            dict2.set_item("aLGO", "found");
+            dict.set_item("oTRo", dict2);
             
             let res = dictor(py, dict, "otro.algo".to_string(),
-             None, None,Some(true), None);
+             None, None,Some(true), None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
-
         });
-       
+    }
+
+    #[test]
+    fn test_default_ignorecase(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let dict = PyDict::new(py);
+            let dict2 = PyDict::new(py);
+            dict2.set_item("aLGO", "found");
+            dict.set_item("oTRo", dict2);
+            
+            let res = dictor(py, dict, "otro.nonexistent".to_string(),
+             Some("replaced".to_string()), None,Some(true), None, None);
+            assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
+        });
+    }
+    #[test]
+    fn test_default(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let dict = PyDict::new(py);
+            let dict2 = PyDict::new(py);
+            dict2.set_item("algo", "found");
+            dict.set_item("otro", dict2);
+            
+            let res = dictor(py, dict, "otro.nonexistent".to_string(),
+             Some("replaced".to_string()), None,Some(true), None, None);
+            assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
+        });
+    }
+
+    #[test]
+    fn test_search(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let dict1 = PyDict::new(py);
+            let dict2 = PyDict::new(py);
+            let dict3 = PyDict::new(py);
+            dict1.set_item("some_key", "value1").unwrap();
+            dict2.set_item("some_key", "value_2").unwrap();
+            dict3.set_item("some_key", "value_3").unwrap();
+            let list: &PyList = PyList::new(py, vec![dict1, dict2, dict3]);
+        
+            let res = dictor(py, list, "otro.algo".to_string(),
+             None, None,Some(true), None, Some("pepe".to_string()));
+            assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
+        });
     }
 }
