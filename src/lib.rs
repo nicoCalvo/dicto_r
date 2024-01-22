@@ -93,9 +93,6 @@ fn dictor(_py: Python,
     let mut inner_object: &PyAny = data.try_into().unwrap();
     let input: Input;
     let ignorecase = ignorecase.unwrap_or(false);
-    // let default_resp = PyString::new(_py, default.unwrap_or("".to_string()).as_str());
-    
-    // if search provided, a diff approach must be followed?
 
     if let Some(delimiter) = pathsep{
         input = Input::new(path, delimiter);
@@ -108,6 +105,7 @@ fn dictor(_py: Python,
     };
     let accumulator: Vec<&PyAny> = vec![];
     let mut inner_item: Result<&PyAny, PyErr>;
+
     for mut arg in input.args.into_iter(){
         if inner_object.is_instance_of::<PyDict>(){
             inner_object = inner_object.downcast::<PyDict>().unwrap();
@@ -181,11 +179,7 @@ fn dictor(_py: Python,
         };
     }
     //TODO checknone: if None is found and `checknone`` set a PyErr must be raised
-    //TODO default: if None is found and `default` is set, a None result must be returned
-    // si hay search, usar search:
-    // search: itero en todo el dict/subdict haciendo una acumulacion de valores,
-    // py any termina siendo un vec de PyAny donde => PyNone, default, y PyAny 
-    // no puede devolver anidaciones, solo flat lists
+    // no puede devolver anidaciones, solo flat lists?
     if inner_object.is_none() && default.is_some(){
         let default_resp = PyString::new(_py, default.unwrap());
         Ok(Some(default_resp.to_object(_py)))
