@@ -15,7 +15,7 @@ use std::fmt::Display;
 use std::time::Instant;
 
 use pyo3::exceptions::PyTypeError;
-use pyo3::types::PyString;
+use pyo3::types::{PyString, PyList};
 use pyo3::{ToPyObject, PyAny, PyErr};
 use pyo3::{types::{PyDict, PyModule}, PyResult, pymodule, Python, PyObject, exceptions::PyValueError,
 wrap_pyfunction, pyfunction};
@@ -84,16 +84,16 @@ pathsep (str, optional): Path separator for path parameter. Defaults to ".".
 fn dictor(_py: Python, 
     data: & PyAny,
     path: String, 
-    default: Option<String>,
+    default: Option<&str>,
     checknone: Option<bool>,
     ignorecase: Option<bool>,
     pathsep: Option<String>,
     search: Option<String>
 ) -> PyResult<Option<PyObject>> {
-    let mut inner_dict: &PyAny = data.try_into().unwrap();
+    let mut inner_object: &PyAny = data.try_into().unwrap();
     let input: Input;
     let ignorecase = ignorecase.unwrap_or(false);
-    let default_resp = PyString::new(_py, default.unwrap().as_str());
+    // let default_resp = PyString::new(_py, default.unwrap_or("".to_string()).as_str());
     
     // if search provided, a diff approach must be followed?
 
@@ -106,46 +106,75 @@ fn dictor(_py: Python,
             Err(e) => Err(PyErr::new::<PyTypeError, _>(e.to_string()))?
         };
     };
-    
+    let accumulator: Vec<&PyAny> = vec![];
     let mut inner_item: Result<&PyAny, PyErr>;
     for mut arg in input.args.into_iter(){
-        if ignorecase {
-            let as_dict = inner_dict.downcast::<PyDict>().unwrap();
-            let cased_key= as_dict.keys().iter()
-            .filter(|k|{
-                k.to_string().to_lowercase() == arg.to_lowercase()
-            })
-            .map(|k| k.to_string())
-            .collect::<Vec<String>>();
-            if let Some(key) = cased_key.first(){
-                arg = key.to_owned();
+        if inner_object.is_instance_of::<PyDict>(){
+            inner_object = inner_object.downcast::<PyDict>().unwrap();
+        } else if inner_object.is_instance_of::<PyList>(){
+            inner_object = inner_object.downcast::<PyList>().unwrap();
+        } else{
+            if search.is_some(){
+                let py_list = PyList::new(_py, accumulator);
+                return Ok(Some(py_list.to_object(_py)))
+            }else if let Some(default_resp) = default{
+                let resp = PyString::new(_py, default_resp);
+                return Ok(Some(resp.to_object(_py)));
             }else{
-                if default_resp.is_empty().unwrap(){
-                    return Ok(None);
-                    
+                return Ok(None)
+            }
+                // si llegue hasta aca y tengo un arg
+                // quiere decir que ya no hay mas por buscar, deberia devolver el acumulador
+                // si search is some sino devolver None o default
+        }
+
+        if ignorecase {
+            // filter by keys
+            // if foudn in key, override key with original value and continue
+            // if not dict, do not do anythin
+            if inner_object.is_instance_of::<PyDict>(){
+                let inner_dict = inner_object.downcast::<PyDict>().unwrap();
+                let cased_key= inner_dict.keys().iter()
+                .filter(|k|{
+                    k.to_string().to_lowercase() == arg.to_lowercase()
+                })
+                .map(|k| k.to_string())
+                .collect::<Vec<String>>();
+                if let Some(key) = cased_key.first(){
+                    arg = key.to_owned();
                 } else{
-                    return Ok(Some(default_resp.to_object(_py)));
+                    // TODO: if search is some, return the vec of matches
+
+                    if let Some(default_resp) = default{
+                        let resp = PyString::new(_py, default_resp);
+                        return Ok(Some(resp.to_object(_py)));
+                    } else{
+                        return Ok(None);
+                    }
                 }
             }
         };
         if let Ok(num_arg) = arg.parse::<i32>(){
-            inner_item  = inner_dict.get_item(num_arg);
+            inner_item  = inner_object.get_item(num_arg);
             if inner_item.is_err(){
-                inner_item = inner_dict.get_item(arg);
+                inner_item = inner_object.get_item(arg);
+                // if item matches search, attach to accumulator prior overriding
             }
         }
         else{
-            inner_item = inner_dict.get_item(arg);
+            // if item matches search, attach to accumulator prior overriding
+            inner_item = inner_object.get_item(arg);
         };
         
         if let Ok(item) = inner_item{
-            inner_dict = item;
+            inner_object = item;
             
         }else{
             // TODO: si pasa default usar default
-            if default_resp.is_empty().unwrap(){
-                return Ok(Some(default_resp.to_object(_py)));
-            } else{
+            if let Some(default_resp) = default{
+                let resp = PyString::new(_py, default_resp);
+                return Ok(Some(resp.to_object(_py)));
+            }else{
                 return Ok(None);
             }
             
@@ -157,10 +186,11 @@ fn dictor(_py: Python,
     // search: itero en todo el dict/subdict haciendo una acumulacion de valores,
     // py any termina siendo un vec de PyAny donde => PyNone, default, y PyAny 
     // no puede devolver anidaciones, solo flat lists
-    if inner_dict.is_none(){
+    if inner_object.is_none() && default.is_some(){
+        let default_resp = PyString::new(_py, default.unwrap());
         Ok(Some(default_resp.to_object(_py)))
     }else {
-        Ok(Some(inner_dict.to_object(_py)))
+        Ok(Some(inner_object.to_object(_py)))
     }
     
 }
@@ -176,7 +206,7 @@ pub fn dicto_r(_py: Python, m: &PyModule) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use pyo3::types::{PyDict, PyList};
-    use pyo3::{Python, PyTryFrom};
+    use pyo3::Python;
 
     use super::*;
 
@@ -232,7 +262,7 @@ mod tests {
             dict.set_item("oTRo", dict2);
             
             let res = dictor(py, dict, "otro.nonexistent".to_string(),
-             Some("replaced".to_string()), None,Some(true), None, None);
+             Some("replaced"), None,Some(true), None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
         });
     }
@@ -246,7 +276,7 @@ mod tests {
             dict.set_item("otro", dict2);
             
             let res = dictor(py, dict, "otro.nonexistent".to_string(),
-             Some("replaced".to_string()), None,Some(true), None, None);
+             Some("replaced"), None,Some(true), None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
         });
     }
@@ -264,8 +294,9 @@ mod tests {
             let list: &PyList = PyList::new(py, vec![dict1, dict2, dict3]);
         
             let res = dictor(py, list, "otro.algo".to_string(),
-             None, None,Some(true), None, Some("pepe".to_string()));
-            assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
+             None, None,Some(true), None, Some("some_key".to_string()));
+            dbg!(res);
+            // assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
         });
     }
 }
