@@ -121,11 +121,9 @@ fn dictor(_py: Python,
                 }else{
                     return Ok(None)
                 }
+            }
 
             if ignorecase {
-                // filter by keys
-                // if found in key, override key with original value and continue
-                // if not dict, do not do anythin
                 if inner_object.is_instance_of::<PyDict>(){
                     let inner_dict = inner_object.downcast::<PyDict>().unwrap();
                     let cased_key= inner_dict.keys().iter()
@@ -177,7 +175,6 @@ fn dictor(_py: Python,
         }
 
      
-    }
     //TODO checknone: if None is found and `checknone`` set a PyErr must be raised
     if inner_object.is_none() && default.is_some(){
         let default_resp = PyString::new(_py, default.unwrap());
