@@ -173,42 +173,10 @@ fn dictor(_py: Python,
         }
     }
     if search.is_some() &&  !inner_object.is_none(){
-        let has_items = true;
-        let search_string = search.unwrap();
-        let search_str = search_string.as_str();
-        println!("yolo");
-
-        // while has_items{
-        //     if inner_object.is_instance_of::<PyDict>(){
-        //         inner_object = inner_object.downcast::<PyDict>().unwrap();
-        //         //por cada key debo iterar de nuevo buscando el valor
-        //         // tiene que tener recursion?
-        //         // buscar keys si existe
-        //         inner_object = inner_object.next();
-        //     } else if inner_object.is_instance_of::<PyList>(){
-        //         inner_object = inner_object.downcast::<PyList>().unwrap();
-        //         let res =  inner_object.iter()?.map(|element|{
-        //             if inner_object.is_instance_of::<PyDict>(){
-        //                 let elm = inner_object.get_item(search_str);
-        //                 match elm {
-        //                     Ok(v) => accumulator.push(v),
-        //                     Err(_)=>println!("value not found")
-        //                 };
-        //             }
-        //         });
-        //     } else if inner_object.valu
-
-
+        todo!("call find_occurrences")
         }
 
-        for elm in inner_object.iter()?{
-            if inner_object.is_instance_of::<PyDict>(){
-                inner_object = inner_object.downcast::<PyDict>().unwrap();
-            } else if inner_object.is_instance_of::<PyList>(){
-                inner_object = inner_object.downcast::<PyList>().unwrap();
-            } 
-        }
-        // loopear en inner_dict por cada elemento ver si existe el valor para una key
+     
     }
     //TODO checknone: if None is found and `checknone`` set a PyErr must be raised
     if inner_object.is_none() && default.is_some(){
