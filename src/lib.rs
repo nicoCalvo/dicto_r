@@ -415,7 +415,8 @@ mod tests {
         
             let res = dictor(py, list, Some("otro.algo".to_string()),
              None, None,Some(true), None, Some("some_key".to_string()));
-            //assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
+            let content = res.unwrap();
+            assert!(content.is_none());
         });
     }
 }
