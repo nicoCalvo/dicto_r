@@ -82,6 +82,7 @@ checknone (bool, optional): If set, an exception is thrown if the value
 ignorecase (bool, optional): If set, upper/lower-case keys are treated
     the same. Defaults to False.
 pathsep (str, optional): Path separator for path parameter. Defaults to ".".
+rtype=None,
 */
 #[pyfunction]
 fn dictor(_py: Python, 
@@ -91,11 +92,13 @@ fn dictor(_py: Python,
     checknone: Option<bool>,
     ignorecase: Option<bool>,
     pathsep: Option<String>,
-    search: Option<String>
+    search: Option<String>,
+    rtype: Option<String> // TODO: test if movable to Enum Int/String
 ) -> PyResult<Option<PyObject>> {
     let mut inner_object: &PyAny = data.try_into().unwrap();
     let input: Input;
     let ignorecase = ignorecase.unwrap_or(false);
+    let mut found = false;
     if path.is_none() && search.is_none(){
         return Ok(None)
     }
@@ -116,6 +119,7 @@ fn dictor(_py: Python,
         let mut inner_item: Result<&PyAny, PyErr>;
         
         if !input.args.is_empty(){
+            
             for mut arg in input.args.into_iter(){
                 if inner_object.is_instance_of::<PyDict>(){
                     inner_object = inner_object.downcast::<PyDict>().unwrap();
@@ -151,6 +155,8 @@ fn dictor(_py: Python,
                         }
                     }
                 };
+                // if arg is int (as string) it means we are dealing with a list (or supposing it)
+                // due to the int arg
                 if let Ok(num_arg) = arg.parse::<i32>(){
                     inner_item  = inner_object.get_item(num_arg);
                     if inner_item.is_err(){
@@ -160,11 +166,9 @@ fn dictor(_py: Python,
                 else{
                     inner_item = inner_object.get_item(arg);
                 };
-                
                 if let Ok(item) = inner_item{
-
                     inner_object = item;
-                    
+                    found = true;
                 }else{
                     if let Some(default_resp) = default{
                         let resp = PyString::new(_py, default_resp);
@@ -186,11 +190,11 @@ fn dictor(_py: Python,
 
      
     //TODO checknone: if None is found and `checknone`` set a PyErr must be raised
-    if inner_object.is_none() && default.is_some(){
+    if !found && default.is_some(){
         let default_resp = PyString::new(_py, default.unwrap());
-        Ok(Some(default_resp.to_object(_py)))
+        Ok(Some(default_resp.into()))
     }else {
-        Ok(Some(inner_object.to_object(_py)))
+        Ok(Some(inner_object.into()))
     }
     
 }
@@ -260,14 +264,60 @@ mod tests {
                 (None, 'comedy', None), \
             ]]", None, None).unwrap();
             let res = dictor(py, list_dict, None, Some("pepe"),None, 
-                None, None, Some("name".to_string()));
+                None, None, Some("name".to_string()), None);
             let expected = PyList::new(py,vec!["spaceballs", "gone with the wind", "titanic", "pepe"]);
             let content = res.unwrap().unwrap();
             let content: &PyList = content.downcast(py).unwrap();
             assert!(expected.compare(content).is_ok());
+            
+           
+                
+        });
+    }
+    #[test]
+    fn find_null_key_ignore_default(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py|{
+             // find null key
+             let dict = py.eval("{ \
+                'terminator': [ \
+                    { \
+                        'terminator 1': { \
+                            'year': 1987, \
+                            'status': 'Nested Status', \
+                            'genre': [ \
+                                'futureshock', \
+                                'scifi' \
+                            ] \
+                        } \
+                    }, \
+                    { \
+                        'terminator 2': { \
+                            'year': 1992, \
+                            'genre': [ \
+                                'nuclear war', \
+                                'scifi' \
+                            ] \
+                        } \
+                    }, \
+                    { \
+                        'terminator 3': { \
+                            'year': 0, \
+                            'available': 'false', \
+                            'stars': '', \
+                            'preview': None \
+                        }
+                    }
+                ]
+            }", None, None).unwrap();
+            let res = dictor(py, dict, 
+                Some("terminator.2.terminator 3.preview".to_owned()),
+                Some("pepe"),None, 
+                None, None, None, None);
+            let content = res.unwrap().unwrap();
+            assert!(content.is_none(py))
 
         });
-        
     }
     #[test]
     fn find_occurences_test(){
@@ -321,7 +371,7 @@ mod tests {
                     ('titanic', 'comedy', None), \
                 ]]", None, None).unwrap();
             let res = dictor(py, list_dict, None, None,None, 
-                None, None, Some("name".to_string()));
+                None, None, Some("name".to_string()), None);
             let expected = PyList::new(py,vec!["spaceballs", "gone with the wind", "titanic", "titanic"]);
             let content = res.unwrap().unwrap();
             assert!(expected.compare(content).is_ok());
@@ -340,7 +390,7 @@ mod tests {
             let res = dictor(
                 py, dict, Some("item.4".into()), 
                 None, None, 
-                None, None, None);
+                None, None, None, None);
             assert!(res.unwrap().is_none());
 
             let dict2 = PyDict::new(py);
@@ -349,7 +399,7 @@ mod tests {
             let res = dictor(
                 py, dict, Some("other_item.4".into()), 
                 None, None, 
-                None, None, None).unwrap();
+                None, None, None, None).unwrap();
             assert_eq!(res.unwrap().to_string() , "found".to_string());
 
          
@@ -367,7 +417,7 @@ mod tests {
             dict.set_item("oTRo", dict2);
             
             let res = dictor(py, dict, Some("otro.algo".to_string()),
-             None, None,Some(true), None, None);
+             None, None,Some(true), None, None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
         });
     }
@@ -382,7 +432,7 @@ mod tests {
             dict.set_item("oTRo", dict2);
             
             let res = dictor(py, dict, Some("otro.nonexistent".to_string()),
-             Some("replaced"), None,Some(true), None, None);
+             Some("replaced"), None,Some(true), None, None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
         });
     }
@@ -396,7 +446,7 @@ mod tests {
             dict.set_item("otro", dict2);
             
             let res = dictor(py, dict, Some("otro.nonexistent".to_string()),
-             Some("replaced"), None,Some(true), None, None);
+             Some("replaced"), None,Some(true), None, None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
         });
     }
@@ -414,7 +464,7 @@ mod tests {
             let list: &PyList = PyList::new(py, vec![dict1, dict2, dict3]);
         
             let res = dictor(py, list, Some("otro.algo".to_string()),
-             None, None,Some(true), None, Some("some_key".to_string()));
+             None, None,Some(true), None, Some("some_key".to_string()), None);
             let content = res.unwrap();
             assert!(content.is_none());
         });
