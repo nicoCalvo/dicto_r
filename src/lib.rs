@@ -8,15 +8,14 @@
 //!Dictor is polite with Exception errors commonly encountered when parsing large Dictionaries/JSONs.
 //!Using Dictor eliminates the repeated use of try/except blocks in your code when dealing with lookups of large JSON structures, as well as providing flexibility for inserting fallback values on missing keys/values.
 
-
 use std::any::Any;
 use std::default;
 use std::fmt::Display;
 use std::time::Instant;
 
 use pyo3::exceptions::PyTypeError;
-use pyo3::types::{PyString, PyList};
-use pyo3::{ToPyObject, PyAny, PyErr};
+use pyo3::types::{PyString, PyList, PyBool};
+use pyo3::{ToPyObject, PyAny, PyErr, AsPyPointer};
 use pyo3::{types::{PyDict, PyModule}, PyResult, pymodule, Python, PyObject, exceptions::PyValueError,
 wrap_pyfunction, pyfunction};
 
@@ -114,7 +113,6 @@ fn dictor(_py: Python,
             };
         };
         
-        // let accumulator: Vec<&PyAny> = vec![];
         let mut inner_item: Result<&PyAny, PyErr>;
         
         if !input.args.is_empty(){
@@ -181,9 +179,9 @@ fn dictor(_py: Python,
     }
     if search.is_some() &&  !inner_object.is_none(){
         let accumulator: Vec<PyAny> = vec![];
-        let asd = PyList::new(_py, accumulator);
-        find_occurences(_py, search.unwrap().as_str(), inner_object, asd);
-        return Ok(Some(asd.to_object(_py)));
+        let py_list_accumulator = PyList::new(_py, accumulator);
+        find_occurences(_py, search.unwrap().as_str(), inner_object, default, py_list_accumulator);
+        return Ok(Some(py_list_accumulator.to_object(_py)));
         }
 
      
@@ -198,13 +196,13 @@ fn dictor(_py: Python,
 }
 
 
-fn find_occurences(py: Python, target: &str, searchable: &PyAny, accumulator: &PyList){
+fn find_occurences(py: Python, target: &str, searchable: &PyAny, default: Option<&str>, accumulator: &PyList){
     if searchable.is_instance_of::<PyList>(){
         let iter = searchable.iter().unwrap();
         for maybe_element in iter {
             if let Ok(element) = maybe_element{
-                find_occurences(py, &target, element, accumulator);
-               
+                find_occurences(py, &target, element, default, accumulator);
+
             }
         }
     }else if searchable.is_instance_of::<PyDict>(){
@@ -214,12 +212,19 @@ fn find_occurences(py: Python, target: &str, searchable: &PyAny, accumulator: &P
             if let Some(matching_item) = inner_dict.get_item(key){
                 if matching_item.is_instance_of::<PyDict>() ||
                 matching_item.is_instance_of::<PyList>(){
-                    find_occurences(py, target, matching_item, accumulator)
+                    find_occurences(py, target, matching_item, default, accumulator)
                 }else{
-                    if matching_item.is_instance_of::<PyString>() && key.to_string() == target{
-                        let string = matching_item.downcast::<PyString>().unwrap();
-                        accumulator.append(string).unwrap();
-                    } 
+                    let obj_type = matching_item.get_type();
+                    let bool_type = py.get_type::<PyBool>();
+                    let str_type = py.get_type::<PyString>();
+                    if key.to_string() == target{
+                        if obj_type.is(str_type) || obj_type.is(bool_type) {
+                            accumulator.append(matching_item).unwrap();
+                        }else{
+                            accumulator.append(default).unwrap();
+                        }
+                        
+                    }
                 }
 
             }
@@ -243,19 +248,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_missing_key_return_default(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let list_dict = py.eval("[ \
+            {'name': name, 'genre': genre, 'status': status} \
+            for name, genre,status in [ \
+                ('spaceballs', 'comedy', False), \
+                ('gone with the wind', 'tragedy', ''), \
+                ('titanic', 'comedy', True), \
+                (None, 'comedy', None), \
+            ]]", None, None).unwrap();
+            let res = dictor(py, list_dict, None, Some("pepe"),None, 
+                None, None, Some("name".to_string()));
+            let expected = PyList::new(py,vec!["spaceballs", "gone with the wind", "titanic", "pepe"]);
+            let content = res.unwrap().unwrap();
+            let content: &PyList = content.downcast(py).unwrap();
+            assert!(expected.compare(content).is_ok());
+
+        });
+        
+    }
+    #[test]
     fn find_occurences_test(){
         // ejemplo facil:
         // lista de jsons, busco un valor:
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let mut elements: Vec<&PyDict> = vec![];
-            
             for elm in ["pepe", "pipo", "popo"].into_iter(){
                 let elm1 = PyDict::new(py);
                 elm1.set_item("name", elm);
                 elm1.set_item("last_name", format!("{elm}_last_name"));
                 elements.push(elm1);
             }
+
+            // add a None valued item to be replaced by default arg
+            let elm1 = PyDict::new(py);
+            let val: Option<String>;
+            val = None;
+            elm1.set_item("name", val);
+            elm1.set_item("last_name", format!("no_last_name"));
+            elements.push(elm1);
+
             let elm1 = PyDict::new(py);
             elm1.set_item("name", "papa");
             let elements2 : Vec<&PyDict> = vec![elm1];
@@ -265,13 +300,13 @@ mod tests {
             let vec_accumulator : Vec<PyString>= vec![];
             let base_list = PyList::new(py, elements);
             let accumulator = PyList::new(py, vec_accumulator);
-            find_occurences(py, "name", &base_list, accumulator);
-            let expected = PyList::new(py,vec!["pepe", "pipo", "popo", "papa"]);
+            find_occurences(py, "name", &base_list, Some("default"), accumulator);
+            let expected = PyList::new(py,vec!["pepe", "pipo", "popo", "papa", "default"]);
             assert!(accumulator.compare(expected).is_ok());
         });
         
     }
-
+       
     #[test]
     fn test_searching_list_JSON(){
 
@@ -285,7 +320,6 @@ mod tests {
                     ('titanic', 'comedy', True), \
                     ('titanic', 'comedy', None), \
                 ]]", None, None).unwrap();
-            // /find_occurences(py, "name".into(), list_dict, accumulator);
             let res = dictor(py, list_dict, None, None,None, 
                 None, None, Some("name".to_string()));
             let expected = PyList::new(py,vec!["spaceballs", "gone with the wind", "titanic", "titanic"]);
@@ -381,8 +415,7 @@ mod tests {
         
             let res = dictor(py, list, Some("otro.algo".to_string()),
              None, None,Some(true), None, Some("some_key".to_string()));
-            dbg!(res);
-            // assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
+            //assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
         });
     }
 }
