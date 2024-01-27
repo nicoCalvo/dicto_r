@@ -28,12 +28,12 @@ const SLASH: &str = "/";
 #[derive(Debug)]
 pub struct Input{
     args: Vec<String>,
-    delimiter: String
+    delimiter: Option<String>
 }
 impl Input {
     fn new(raw_input: String, delimiter: String) -> Self {
-        let args: Vec<String> = raw_input.split(&delimiter).map(|s| s.to_owned()).collect();
-        Self { args: args, delimiter: delimiter }
+        let args = raw_input.split(&delimiter).map(|s| s.to_owned()).collect();
+        Self { args: args, delimiter: Some(delimiter) }
     }
 }
 
@@ -53,15 +53,19 @@ impl TryFrom<String> for Input{
     type Error = ParseError;
     
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        let mut delimiter: String = "".into();
+        let mut delimiter: Option<String>;
         if let Some(_) = value.find(&DOT){
-            delimiter = DOT.to_owned();
+            delimiter = Some(DOT.to_owned());
         }else if let Some(_) = value.find(&SLASH){
-            delimiter = SLASH.to_owned();
+            delimiter = Some(SLASH.to_owned());
         }else{
-            return Err(ParseError::InvalidDelimiter(delimiter))
+            delimiter = None
         }
-        let args: Vec<String> = value.split(&delimiter).map(|s| s.to_owned()).collect();
+        
+        let args: Vec<String> = match delimiter.clone(){
+            Some(del)=> value.split(&del).map(|s| s.to_owned()).collect(),
+            None => vec![]
+        };
         Ok(Self { args: args, delimiter: delimiter })
         
     }
@@ -83,7 +87,7 @@ pathsep (str, optional): Path separator for path parameter. Defaults to ".".
 #[pyfunction]
 fn dictor(_py: Python, 
     data: & PyAny,
-    path: String, 
+    path: Option<String>, 
     default: Option<&str>,
     checknone: Option<bool>,
     ignorecase: Option<bool>,
@@ -93,85 +97,93 @@ fn dictor(_py: Python,
     let mut inner_object: &PyAny = data.try_into().unwrap();
     let input: Input;
     let ignorecase = ignorecase.unwrap_or(false);
+    if path.is_none() && search.is_none(){
+        return Ok(None)
+    }
 
-    if let Some(delimiter) = pathsep{
-        input = Input::new(path, delimiter);
-   
-    }else{
-        input = match Input::try_from(path) {
-            Ok(input) => input,
-            Err(e) => Err(PyErr::new::<PyTypeError, _>(e.to_string()))?
-        };
-    };
-    let accumulator: Vec<&PyAny> = vec![];
-    let mut inner_item: Result<&PyAny, PyErr>;
+    if path.is_some(){
+        let path = path.unwrap();
     
-    if !input.args.is_empty(){
-        for mut arg in input.args.into_iter(){
-            if inner_object.is_instance_of::<PyDict>(){
-                inner_object = inner_object.downcast::<PyDict>().unwrap();
-            } else if inner_object.is_instance_of::<PyList>(){
-                inner_object = inner_object.downcast::<PyList>().unwrap();
-            } else{
-                // if can't keep iterating due to not iterator, then we couldn't find the value
-                // so either default or None value is returned
-                if let Some(default_resp) = default{
-                    let resp = PyString::new(_py, default_resp);
-                    return Ok(Some(resp.to_object(_py)));
-                }else{
-                    return Ok(None)
-                }
-            }
-
-            if ignorecase {
+        if let Some(delimiter) = pathsep{
+            input = Input::new(path, delimiter);
+    
+        }else{
+            input = match Input::try_from(path) {
+                Ok(input) => input,
+                Err(e) => Err(PyErr::new::<PyTypeError, _>(e.to_string()))?
+            };
+        };
+        
+        // let accumulator: Vec<&PyAny> = vec![];
+        let mut inner_item: Result<&PyAny, PyErr>;
+        
+        if !input.args.is_empty(){
+            for mut arg in input.args.into_iter(){
                 if inner_object.is_instance_of::<PyDict>(){
-                    let inner_dict = inner_object.downcast::<PyDict>().unwrap();
-                    let cased_key= inner_dict.keys().iter()
-                    .filter(|k|{
-                        k.to_string().to_lowercase() == arg.to_lowercase()
-                    })
-                    .map(|k| k.to_string())
-                    .collect::<Vec<String>>();
-                    if let Some(key) = cased_key.first(){
-                        arg = key.to_owned();
-                    } else{
-                        if let Some(default_resp) = default{
-                            let resp = PyString::new(_py, default_resp);
-                            return Ok(Some(resp.to_object(_py)));
-                        } else{
-                            return Ok(None);
-                        }
+                    inner_object = inner_object.downcast::<PyDict>().unwrap();
+                } else if inner_object.is_instance_of::<PyList>(){
+                    inner_object = inner_object.downcast::<PyList>().unwrap();
+                } else{
+                    if let Some(default_resp) = default{
+                        let resp = PyString::new(_py, default_resp);
+                        return Ok(Some(resp.to_object(_py)));
+                    }else{
+                        return Ok(None)
                     }
                 }
-            };
-            if let Ok(num_arg) = arg.parse::<i32>(){
-                inner_item  = inner_object.get_item(num_arg);
-                if inner_item.is_err(){
-                    inner_item = inner_object.get_item(arg);
-                    // if item matches search, attach to accumulator prior overriding
-                }
-            }
-            else{
-                inner_item = inner_object.get_item(arg);
-            };
-            
-            if let Ok(item) = inner_item{
 
-                inner_object = item;
-                
-            }else{
-                if let Some(default_resp) = default{
-                    let resp = PyString::new(_py, default_resp);
-                    return Ok(Some(resp.to_object(_py)));
-                }else{
-                    return Ok(None);
+                if ignorecase {
+                    if inner_object.is_instance_of::<PyDict>(){
+                        let inner_dict = inner_object.downcast::<PyDict>().unwrap();
+                        let cased_key= inner_dict.keys().iter()
+                        .filter(|k|{
+                            k.to_string().to_lowercase() == arg.to_lowercase()
+                        })
+                        .map(|k| k.to_string())
+                        .collect::<Vec<String>>();
+                        if let Some(key) = cased_key.first(){
+                            arg = key.to_owned();
+                        } else{
+                            if let Some(default_resp) = default{
+                                let resp = PyString::new(_py, default_resp);
+                                return Ok(Some(resp.to_object(_py)));
+                            } else{
+                                return Ok(None);
+                            }
+                        }
+                    }
+                };
+                if let Ok(num_arg) = arg.parse::<i32>(){
+                    inner_item  = inner_object.get_item(num_arg);
+                    if inner_item.is_err(){
+                        inner_item = inner_object.get_item(arg);
+                    }
                 }
+                else{
+                    inner_item = inner_object.get_item(arg);
+                };
                 
-            };
+                if let Ok(item) = inner_item{
+
+                    inner_object = item;
+                    
+                }else{
+                    if let Some(default_resp) = default{
+                        let resp = PyString::new(_py, default_resp);
+                        return Ok(Some(resp.to_object(_py)));
+                    }else{
+                        return Ok(None);
+                    }
+                    
+                };
+            }
         }
     }
     if search.is_some() &&  !inner_object.is_none(){
-        todo!("call find_occurrences")
+        let accumulator: Vec<PyAny> = vec![];
+        let asd = PyList::new(_py, accumulator);
+        find_occurences(_py, search.unwrap().as_str(), inner_object, asd);
+        return Ok(Some(asd.to_object(_py)));
         }
 
      
@@ -187,7 +199,6 @@ fn dictor(_py: Python,
 
 
 fn find_occurences(py: Python, target: &str, searchable: &PyAny, accumulator: &PyList){
-    dbg!(searchable);
     if searchable.is_instance_of::<PyList>(){
         let iter = searchable.iter().unwrap();
         for maybe_element in iter {
@@ -207,7 +218,7 @@ fn find_occurences(py: Python, target: &str, searchable: &PyAny, accumulator: &P
                 }else{
                     if matching_item.is_instance_of::<PyString>() && key.to_string() == target{
                         let string = matching_item.downcast::<PyString>().unwrap();
-                        accumulator.append(string);
+                        accumulator.append(string).unwrap();
                     } 
                 }
 
@@ -237,8 +248,6 @@ mod tests {
         // lista de jsons, busco un valor:
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
-            let my_string = PyString::new(py, "pepe");
-            let content = my_string.to_str();
             let mut elements: Vec<&PyDict> = vec![];
             
             for elm in ["pepe", "pipo", "popo"].into_iter(){
@@ -257,11 +266,34 @@ mod tests {
             let base_list = PyList::new(py, elements);
             let accumulator = PyList::new(py, vec_accumulator);
             find_occurences(py, "name", &base_list, accumulator);
-            dbg!(accumulator);
+            let expected = PyList::new(py,vec!["pepe", "pipo", "popo", "papa"]);
+            assert!(accumulator.compare(expected).is_ok());
         });
         
     }
 
+    #[test]
+    fn test_searching_list_JSON(){
+
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let list_dict = py.eval("[ \
+                {'name': name, 'genre': genre, 'status': status} \
+                for name, genre,status in [ \
+                    ('spaceballs', 'comedy', False), \
+                    ('gone with the wind', 'tragedy', ''), \
+                    ('titanic', 'comedy', True), \
+                    ('titanic', 'comedy', None), \
+                ]]", None, None).unwrap();
+            // /find_occurences(py, "name".into(), list_dict, accumulator);
+            let res = dictor(py, list_dict, None, None,None, 
+                None, None, Some("name".to_string()));
+            let expected = PyList::new(py,vec!["spaceballs", "gone with the wind", "titanic", "titanic"]);
+            let content = res.unwrap().unwrap();
+            assert!(expected.compare(content).is_ok());
+        });
+       
+    }
 
 
     #[test]
@@ -272,7 +304,7 @@ mod tests {
             dict.set_item("item", vec![1,2,3]).unwrap();
             // test index out of range should be silenced
             let res = dictor(
-                py, dict, "item.4".into(), 
+                py, dict, Some("item.4".into()), 
                 None, None, 
                 None, None, None);
             assert!(res.unwrap().is_none());
@@ -281,7 +313,7 @@ mod tests {
             dict2.set_item("4", "found");
             dict.set_item("other_item", dict2);
             let res = dictor(
-                py, dict, "other_item.4".into(), 
+                py, dict, Some("other_item.4".into()), 
                 None, None, 
                 None, None, None).unwrap();
             assert_eq!(res.unwrap().to_string() , "found".to_string());
@@ -300,7 +332,7 @@ mod tests {
             dict2.set_item("aLGO", "found");
             dict.set_item("oTRo", dict2);
             
-            let res = dictor(py, dict, "otro.algo".to_string(),
+            let res = dictor(py, dict, Some("otro.algo".to_string()),
              None, None,Some(true), None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
         });
@@ -315,7 +347,7 @@ mod tests {
             dict2.set_item("aLGO", "found");
             dict.set_item("oTRo", dict2);
             
-            let res = dictor(py, dict, "otro.nonexistent".to_string(),
+            let res = dictor(py, dict, Some("otro.nonexistent".to_string()),
              Some("replaced"), None,Some(true), None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
         });
@@ -329,7 +361,7 @@ mod tests {
             dict2.set_item("algo", "found");
             dict.set_item("otro", dict2);
             
-            let res = dictor(py, dict, "otro.nonexistent".to_string(),
+            let res = dictor(py, dict, Some("otro.nonexistent".to_string()),
              Some("replaced"), None,Some(true), None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
         });
@@ -347,7 +379,7 @@ mod tests {
             dict3.set_item("some_key", "value_3").unwrap();
             let list: &PyList = PyList::new(py, vec![dict1, dict2, dict3]);
         
-            let res = dictor(py, list, "otro.algo".to_string(),
+            let res = dictor(py, list, Some("otro.algo".to_string()),
              None, None,Some(true), None, Some("some_key".to_string()));
             dbg!(res);
             // assert_eq!(res.unwrap().to_object(py).to_string(), "found".to_string());
