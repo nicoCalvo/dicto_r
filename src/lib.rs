@@ -39,6 +39,10 @@ impl Input {
         let args = raw_input.split(&delimiter).map(|s| s.to_owned()).collect();
         Self { args: args, delimiter: Some(delimiter) }
     }
+
+    // fn original_path(&self) ->String{
+    //     self.args.iter().intersperse(&self.delimiter.unwrap()).collect();
+    // }
 }
 
 #[derive(Debug)]
@@ -57,10 +61,6 @@ impl TryFrom<String> for Input{
     type Error = ParseError;
     
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        // cleanup path
-        // necesito corta el string cuando sea solo "."
-        // si encuentro una "\" entre dos elementos los debo reunir
-
         let escaped_path = r"\.".to_string();
         if value.contains(&escaped_path){
             let mut args: Vec<String> = vec![];
@@ -160,7 +160,7 @@ fn dictor(_py: Python,
     }
 
     if path.is_some(){
-        let path = path.unwrap();
+        let path = path.clone().unwrap();
     
         if let Some(delimiter) = pathsep{
             input = Input::new(path, delimiter);
@@ -206,6 +206,9 @@ fn dictor(_py: Python,
                                 let resp = PyString::new(_py, default_resp);
                                 return Ok(Some(resp.to_object(_py)));
                             } else{
+                                if checknone.is_some_and(|v|v){
+                                    return Err(PyErr::new::<PyValueError, _>("value not found for search path"));
+                                }
                                 return Ok(None);
                             }
                         }
@@ -229,7 +232,9 @@ fn dictor(_py: Python,
                     if let Some(default_resp) = default{
                         let resp = PyString::new(_py, default_resp);
                         return Ok(Some(resp.to_object(_py)));
-                    }else{
+                    }else if checknone.is_some_and(|v|v){
+                        return Err(PyErr::new::<PyValueError, _>("value not found for search path"));
+                    }else {
                         return Ok(None);
                     }
                     
@@ -241,7 +246,13 @@ fn dictor(_py: Python,
         let accumulator: Vec<PyAny> = vec![];
         let py_list_accumulator = PyList::new(_py, accumulator);
         find_occurences(_py, search.unwrap().as_str(), inner_object, default, py_list_accumulator);
-        return Ok(Some(py_list_accumulator.to_object(_py)));
+        if py_list_accumulator.is_empty() && checknone.is_some_and(|v|v){
+            dbg!("ES UN ERROR! 1");
+            return Err(PyErr::new::<PyValueError, _>(format!("value not found for search path: {:?}", path)));
+        }else{
+            return Ok(Some(py_list_accumulator.to_object(_py)));
+        }
+        
         }
 
      
@@ -249,10 +260,13 @@ fn dictor(_py: Python,
     if !found && default.is_some(){
         let default_resp = PyString::new(_py, default.unwrap());
         Ok(Some(default_resp.into()))
-    }else {
+    }else if !found && checknone.is_some_and(|v|v) && inner_object.is_none(){
+        dbg!("ES UN ERROR!  2");
+        return Err(PyValueError::new_err(format!("value not found for search path: {:?}", path)));
+
+    }else{
         // cast to return type if no errors, keep original type otherwise
         match return_type{
-
             ReturnType::STRING =>{
                 // ignore if cannot cast and keep original format
                 let casted_matching_item = inner_object.str();
@@ -600,9 +614,7 @@ mod tests {
                 None, None, None, None).unwrap();
             let content = res.unwrap();
             assert_eq!(content.to_string(), "romance");
-          
 
-            // "dirty\.harry.genre"
         });
     }
 
@@ -666,6 +678,27 @@ mod tests {
              None, None,Some(true), None, Some("some_key".to_string()), None);
             let content = res.unwrap();
             assert!(content.is_none());
+        });
+    }
+
+
+    #[test]
+    fn test_raise_exception(){
+
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py| {
+            let list_dict = py.eval("[ \
+                {'name': name, 'genre': genre, 'status': status} \
+                for name, genre,status in [ \
+                    ('spaceballs', 'comedy', False), \
+                    ('gone with the wind', 'tragedy', ''), \
+                    ('titanic', 'comedy', True), \
+                    ('titanic', 'comedy', None), \
+                ]]", None, None).unwrap();
+            let res = dictor(py, list_dict, 
+                Some("8.sarasa".to_owned()), None, Some(true), 
+                None, None, None, None);
+            
         });
     }
 }
