@@ -177,7 +177,6 @@ fn dictor(_py: Python,
         if !input.args.is_empty(){
             
             for mut arg in input.args.into_iter(){
-                dbg!(&inner_object);
                 if inner_object.is_instance_of::<PyDict>(){
                     inner_object = inner_object.downcast::<PyDict>().unwrap();
                 } else if inner_object.is_instance_of::<PyList>(){
@@ -224,7 +223,6 @@ fn dictor(_py: Python,
                     inner_item = inner_object.get_item(arg);
                 };
                 if let Ok(item) = inner_item{
-                    dbg!(&item);
                     inner_object = item;
                     found = true;
                 }else{
@@ -243,7 +241,6 @@ fn dictor(_py: Python,
         let accumulator: Vec<PyAny> = vec![];
         let py_list_accumulator = PyList::new(_py, accumulator);
         find_occurences(_py, search.unwrap().as_str(), inner_object, default, py_list_accumulator);
-        dbg!(py_list_accumulator);
         return Ok(Some(py_list_accumulator.to_object(_py)));
         }
 
@@ -424,7 +421,6 @@ mod tests {
             let content = res.unwrap();
             let content = content.downcast::<PyString>(py).unwrap();
             let expected_content = PyString::new(py, "1983");
-            dbg!(content);
             assert!(content.eq(expected_content).unwrap())
             });
     }
