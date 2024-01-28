@@ -7,14 +7,19 @@
 //! 
 //!Dictor is polite with Exception errors commonly encountered when parsing large Dictionaries/JSONs.
 //!Using Dictor eliminates the repeated use of try/except blocks in your code when dealing with lookups of large JSON structures, as well as providing flexibility for inserting fallback values on missing keys/values.
+#![allow(dead_code)]
+#![allow(unused_variables)]
+#![allow(unused_imports)]
 
 use std::any::Any;
-use std::default;
+use std::{default, vec};
 use std::fmt::Display;
 use std::time::Instant;
 
+use pyo3::prelude::*;
 use pyo3::exceptions::PyTypeError;
-use pyo3::types::{PyString, PyList, PyBool};
+use pyo3::ffi::PyLongObject;
+use pyo3::types::{PyString, PyList, PyBool, PyFloat, PyInt, PyLong, PyTuple};
 use pyo3::{ToPyObject, PyAny, PyErr, AsPyPointer};
 use pyo3::{types::{PyDict, PyModule}, PyResult, pymodule, Python, PyObject, exceptions::PyValueError,
 wrap_pyfunction, pyfunction};
@@ -52,6 +57,34 @@ impl TryFrom<String> for Input{
     type Error = ParseError;
     
     fn try_from(value: String) -> Result<Self, Self::Error> {
+        // cleanup path
+        // necesito corta el string cuando sea solo "."
+        // si encuentro una "\" entre dos elementos los debo reunir
+
+        let escaped_path = r"\.".to_string();
+        if value.contains(&escaped_path){
+            let mut args: Vec<String> = vec![];
+            let vec_value: Vec<&str> = value.split(".").collect();
+            let max_pos = vec_value.len();
+            let mut pos = 0;
+            while pos < max_pos{
+                let elm = vec_value[pos];
+                if elm.ends_with(r"\"){
+                    let elm = elm.replace(r"\", "");
+                    if let Some(part) = vec_value.get(pos+1){
+                        let merged_arg = format!("{elm}.{part}");
+                        args.push(merged_arg);
+                        // skip next iteam as it's been merged
+                        pos += 1;
+                    }
+                    
+                }else{
+                    args.push(elm.to_string());
+                }
+                pos +=1;
+            };
+            return Ok(Self{args: args, delimiter: Some(DOT.to_owned())})
+        }
         let mut delimiter: Option<String>;
         if let Some(_) = value.find(&DOT){
             delimiter = Some(DOT.to_owned());
@@ -63,13 +96,28 @@ impl TryFrom<String> for Input{
         
         let args: Vec<String> = match delimiter.clone(){
             Some(del)=> value.split(&del).map(|s| s.to_owned()).collect(),
-            None => vec![]
+            None => vec![value]
         };
         Ok(Self { args: args, delimiter: delimiter })
         
     }
 }
 
+enum ReturnType{
+    STRING,
+    INT,
+    NONE
+}
+
+impl From<String> for ReturnType{
+    fn from(value: String) -> Self {
+        return match value.as_str(){
+            "str" => ReturnType::STRING,
+            "int" => ReturnType::INT,
+            _ => ReturnType::NONE
+        }
+    }
+}
 /* 
 Args:
 data (dict | list): Input dictionary to be searched in.
@@ -95,10 +143,18 @@ fn dictor(_py: Python,
     search: Option<String>,
     rtype: Option<String> // TODO: test if movable to Enum Int/String
 ) -> PyResult<Option<PyObject>> {
-    let mut inner_object: &PyAny = data.try_into().unwrap();
+    let mut inner_object: &PyAny = pyo3::PyTryInto::try_into(data).unwrap();
     let input: Input;
     let ignorecase = ignorecase.unwrap_or(false);
     let mut found = false;
+    let mut return_type: ReturnType;
+    let mut int_type: PyInt;
+    if rtype.is_some(){
+        return_type = rtype.unwrap().into();
+    }else{
+        return_type = ReturnType::NONE;
+    }
+    
     if path.is_none() && search.is_none(){
         return Ok(None)
     }
@@ -121,6 +177,7 @@ fn dictor(_py: Python,
         if !input.args.is_empty(){
             
             for mut arg in input.args.into_iter(){
+                dbg!(&inner_object);
                 if inner_object.is_instance_of::<PyDict>(){
                     inner_object = inner_object.downcast::<PyDict>().unwrap();
                 } else if inner_object.is_instance_of::<PyList>(){
@@ -167,6 +224,7 @@ fn dictor(_py: Python,
                     inner_item = inner_object.get_item(arg);
                 };
                 if let Ok(item) = inner_item{
+                    dbg!(&item);
                     inner_object = item;
                     found = true;
                 }else{
@@ -185,6 +243,7 @@ fn dictor(_py: Python,
         let accumulator: Vec<PyAny> = vec![];
         let py_list_accumulator = PyList::new(_py, accumulator);
         find_occurences(_py, search.unwrap().as_str(), inner_object, default, py_list_accumulator);
+        dbg!(py_list_accumulator);
         return Ok(Some(py_list_accumulator.to_object(_py)));
         }
 
@@ -194,6 +253,31 @@ fn dictor(_py: Python,
         let default_resp = PyString::new(_py, default.unwrap());
         Ok(Some(default_resp.into()))
     }else {
+        // cast to return type if no errors, keep original type otherwise
+        match return_type{
+
+            ReturnType::STRING =>{
+                // ignore if cannot cast and keep original format
+                let casted_matching_item = inner_object.str();
+                if casted_matching_item.is_ok(){
+                    inner_object = casted_matching_item.unwrap();
+                }
+               
+            },
+            ReturnType::INT =>{
+                let content_str: Result<String, PyErr> = inner_object.extract();
+                // All this nasty hack is to overcome the issue:
+                // https://github.com/PyO3/pyo3/issues/2221
+                if let Ok(content) = content_str{
+                    let numeric_content = content.parse::<usize>();
+                    if let Ok(num_inner_object) = numeric_content{
+                        let asd = PyFloat::new(_py, num_inner_object as f64);
+                        inner_object = asd.into();
+                    }
+                }
+            },
+            ReturnType::NONE=>{} // keep original value
+        };
         Ok(Some(inner_object.into()))
     }
     
@@ -213,22 +297,24 @@ fn find_occurences(py: Python, target: &str, searchable: &PyAny, default: Option
         
         let inner_dict = searchable.downcast::<PyDict>().unwrap();
         for key in inner_dict.keys(){
+           
             if let Some(matching_item) = inner_dict.get_item(key){
-                if matching_item.is_instance_of::<PyDict>() ||
-                matching_item.is_instance_of::<PyList>(){
-                    find_occurences(py, target, matching_item, default, accumulator)
-                }else{
+                if key.to_string() == target{
                     let obj_type = matching_item.get_type();
                     let bool_type = py.get_type::<PyBool>();
                     let str_type = py.get_type::<PyString>();
-                    if key.to_string() == target{
-                        if obj_type.is(str_type) || obj_type.is(bool_type) {
-                            accumulator.append(matching_item).unwrap();
-                        }else{
-                            accumulator.append(default).unwrap();
-                        }
-                        
+                    if obj_type.is(bool_type){
+                        accumulator.append(matching_item).unwrap();
+                    }else if obj_type.is(str_type) {
+                        accumulator.append(matching_item).unwrap();
+                    }else if default.is_some(){
+                        accumulator.append(default).unwrap();
+                    }else{
+                        accumulator.append(matching_item).unwrap();
                     }
+                }else if matching_item.is_instance_of::<PyDict>() ||
+                matching_item.is_instance_of::<PyList>(){
+                    find_occurences(py, target, matching_item, default, accumulator)
                 }
 
             }
@@ -319,6 +405,71 @@ mod tests {
 
         });
     }
+
+    #[test]
+    fn replace_int_to_str(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py|{
+             // find null key
+            let dict = py.eval("\
+                { \
+                    'year': '1983', \
+                    'status': 'Nested Status' \
+                    }", None, None).unwrap(); 
+
+            let res = dictor(py, dict, 
+                Some("year".to_owned()),
+                None,None, 
+                None, None, None, Some("str".into())).unwrap();
+            let content = res.unwrap();
+            let content = content.downcast::<PyString>(py).unwrap();
+            let expected_content = PyString::new(py, "1983");
+            dbg!(content);
+            assert!(content.eq(expected_content).unwrap())
+            });
+    }
+
+    #[test]
+    fn replace_int_to_int(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py|{
+            let dict = py.eval("\
+                { \
+                    'year': 1987, \
+                    'status': 'Nested Status' \
+                    }", None, None).unwrap(); 
+
+            let res = dictor(py, dict, 
+                Some("year".to_owned()),
+                None,None, 
+                None, None, None, Some("int".into())).unwrap();
+            let content = res.unwrap();
+            let content: usize = content.extract(py).unwrap();
+            assert!(content == 1987)
+            });
+    }
+    
+    #[test]
+    fn replace_str_to_int(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py|{
+            let dict = py.eval("\
+                { \
+                    'year': '1987', \
+                    'status': 'Nested Status' \
+                    }", None, None).unwrap(); 
+
+            let res = dictor(py, dict, 
+                Some("year".to_owned()),
+                None,None, 
+                None, None, None, Some("int".into())).unwrap();
+            let content = res.unwrap();
+            let content: f32 = content.extract(py).unwrap();
+            assert!(content == 1987.0)
+            });
+    }
+ 
+
     #[test]
     fn find_occurences_test(){
         // ejemplo facil:
@@ -406,6 +557,58 @@ mod tests {
         })
     }
         
+
+    #[test]
+    fn tupl_value(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py|{
+            let dict = py.eval("\
+            { \
+                'name': 'joe', \
+                'age': 32, \
+                'hobbies': ('skiing', 'archery', 'chess'), \
+                'foods': ['spam', 'celery', ('milk', 'cheese', 'yogurt'), 'cake'], \
+                'key1': { \
+                    'foods': ['carrot', 'potato'], \
+                    'subkey1': { \
+                        'foods': ('pear', 'cherry') \
+                    } \
+                } \
+            }", None, None).unwrap(); 
+
+            let res = dictor(py, dict, 
+                None,
+                None,None, 
+                None, None, Some("foods".into()), None).unwrap();
+            let content = res.unwrap();
+            // I have no idea how to convert this object but from python's side
+            // it runs Ok
+            });
+        
+    }
+    
+    #[test]
+    fn test_escape_pathsep(){
+        pyo3::prepare_freethreaded_python();
+        Python::with_gil(|py|{
+            let dict = py.eval("{\
+                'dirty.harry': { \
+                    'year': 1977, \
+                    'genre': 'romance', \
+                    'status': '' \
+                }\
+            }", None, None).unwrap();
+            let res = dictor(py, dict, 
+                Some(r"dirty\.harry.genre".into()),
+                None,None, 
+                None, None, None, None).unwrap();
+            let content = res.unwrap();
+            assert_eq!(content.to_string(), "romance");
+          
+
+            // "dirty\.harry.genre"
+        });
+    }
 
     #[test]
     fn test_cased_target(){
