@@ -31,6 +31,7 @@ impl Input {
         let args = raw_input.split(&delimiter).map(|s| s.to_owned()).collect();
         Self { args: args, delimiter: Some(delimiter) }
     }
+}
 
 
 #[derive(Debug)]
