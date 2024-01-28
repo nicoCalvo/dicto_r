@@ -130,14 +130,14 @@ fn dictor(_py: Python,
     ignorecase: Option<bool>,
     pathsep: Option<String>,
     search: Option<String>,
-    rtype: Option<String> // TODO: test if movable to Enum Int/String
+    rtype: Option<String>
 ) -> PyResult<Option<PyObject>> {
     let mut inner_object: &PyAny = pyo3::PyTryInto::try_into(data).unwrap();
     let input: Input;
     let ignorecase = ignorecase.unwrap_or(false);
     let mut found = false;
-    let mut return_type: ReturnType;
-    let mut int_type: PyInt;
+    let return_type: ReturnType;
+
     if rtype.is_some(){
         return_type = rtype.unwrap().into();
     }else{
