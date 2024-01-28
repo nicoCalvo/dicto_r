@@ -468,8 +468,6 @@ mod tests {
 
     #[test]
     fn find_occurences_test(){
-        // ejemplo facil:
-        // lista de jsons, busco un valor:
         pyo3::prepare_freethreaded_python();
         Python::with_gil(|py| {
             let mut elements: Vec<&PyDict> = vec![];
@@ -533,7 +531,6 @@ mod tests {
         Python::with_gil(|py| {
             let dict = PyDict::new(py);
             dict.set_item("item", vec![1,2,3]).unwrap();
-            // test index out of range should be silenced
             let res = dictor(
                 py, dict, Some("item.4".into()), 
                 None, None, 
@@ -684,7 +681,7 @@ mod tests {
             let res = dictor(py, list_dict, 
                 Some("8.sarasa".to_owned()), None, Some(true), 
                 None, None, None, None);
-            
+            assert!(res.is_err())
         });
     }
 }
