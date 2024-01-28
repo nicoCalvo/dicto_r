@@ -7,20 +7,12 @@
 //! 
 //!Dictor is polite with Exception errors commonly encountered when parsing large Dictionaries/JSONs.
 //!Using Dictor eliminates the repeated use of try/except blocks in your code when dealing with lookups of large JSON structures, as well as providing flexibility for inserting fallback values on missing keys/values.
-#![allow(dead_code)]
-#![allow(unused_variables)]
-#![allow(unused_imports)]
 
-use std::any::Any;
-use std::{default, vec};
 use std::fmt::Display;
-use std::time::Instant;
 
-use pyo3::prelude::*;
 use pyo3::exceptions::PyTypeError;
-use pyo3::ffi::PyLongObject;
-use pyo3::types::{PyString, PyList, PyBool, PyFloat, PyInt, PyLong, PyTuple};
-use pyo3::{ToPyObject, PyAny, PyErr, AsPyPointer};
+use pyo3::types::{PyString, PyList, PyBool, PyFloat, PyInt};
+use pyo3::{ToPyObject, PyAny, PyErr};
 use pyo3::{types::{PyDict, PyModule}, PyResult, pymodule, Python, PyObject, exceptions::PyValueError,
 wrap_pyfunction, pyfunction};
 
@@ -40,10 +32,6 @@ impl Input {
         Self { args: args, delimiter: Some(delimiter) }
     }
 
-    // fn original_path(&self) ->String{
-    //     self.args.iter().intersperse(&self.delimiter.unwrap()).collect();
-    // }
-}
 
 #[derive(Debug)]
 pub enum ParseError{
@@ -247,7 +235,6 @@ fn dictor(_py: Python,
         let py_list_accumulator = PyList::new(_py, accumulator);
         find_occurences(_py, search.unwrap().as_str(), inner_object, default, py_list_accumulator);
         if py_list_accumulator.is_empty() && checknone.is_some_and(|v|v){
-            dbg!("ES UN ERROR! 1");
             return Err(PyErr::new::<PyValueError, _>(format!("value not found for search path: {:?}", path)));
         }else{
             return Ok(Some(py_list_accumulator.to_object(_py)));
@@ -256,12 +243,10 @@ fn dictor(_py: Python,
         }
 
      
-    //TODO checknone: if None is found and `checknone`` set a PyErr must be raised
     if !found && default.is_some(){
         let default_resp = PyString::new(_py, default.unwrap());
         Ok(Some(default_resp.into()))
     }else if !found && checknone.is_some_and(|v|v) && inner_object.is_none(){
-        dbg!("ES UN ERROR!  2");
         return Err(PyValueError::new_err(format!("value not found for search path: {:?}", path)));
 
     }else{
