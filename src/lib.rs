@@ -125,7 +125,7 @@ rtype=None,
 fn dictor(_py: Python, 
     data: & PyAny,
     path: Option<String>, 
-    default: Option<&str>,
+    default: Option<PyObject>,
     checknone: Option<bool>,
     ignorecase: Option<bool>,
     pathsep: Option<String>,
@@ -172,8 +172,7 @@ fn dictor(_py: Python,
                     inner_object = inner_object.downcast::<PyList>().unwrap();
                 } else{
                     if let Some(default_resp) = default{
-                        let resp = PyString::new(_py, default_resp);
-                        return Ok(Some(resp.to_object(_py)));
+                        return Ok(Some(default_resp));
                     }else{
                         return Ok(None)
                     }
@@ -192,8 +191,7 @@ fn dictor(_py: Python,
                             arg = key.to_owned();
                         } else{
                             if let Some(default_resp) = default{
-                                let resp = PyString::new(_py, default_resp);
-                                return Ok(Some(resp.to_object(_py)));
+                                return Ok(Some(default_resp));
                             } else{
                                 if checknone.is_some_and(|v|v){
                                     return Err(PyErr::new::<PyValueError, _>("value not found for search path"));
@@ -219,8 +217,7 @@ fn dictor(_py: Python,
                     found = true;
                 }else{
                     if let Some(default_resp) = default{
-                        let resp = PyString::new(_py, default_resp);
-                        return Ok(Some(resp.to_object(_py)));
+                        return Ok(Some(default_resp));
                     }else if checknone.is_some_and(|v|v){
                         return Err(PyErr::new::<PyValueError, _>("value not found for search path"));
                     }else {
@@ -234,7 +231,7 @@ fn dictor(_py: Python,
     if search.is_some() &&  !inner_object.is_none(){
         let accumulator: Vec<PyAny> = vec![];
         let py_list_accumulator = PyList::new(_py, accumulator);
-        find_occurences(_py, search.unwrap().as_str(), inner_object, default, py_list_accumulator);
+        find_occurences(_py, search.unwrap().as_str(), inner_object, default.as_ref(), py_list_accumulator);
         if py_list_accumulator.is_empty() && checknone.is_some_and(|v|v){
             return Err(PyErr::new::<PyValueError, _>(format!("value not found for search path: {:?}", path)));
         }else{
@@ -245,8 +242,7 @@ fn dictor(_py: Python,
 
      
     if !found && default.is_some(){
-        let default_resp = PyString::new(_py, default.unwrap());
-        Ok(Some(default_resp.into()))
+        Ok(Some(default.unwrap()))
     }else if !found && checknone.is_some_and(|v|v) && inner_object.is_none(){
         return Err(PyValueError::new_err(format!("value not found for search path: {:?}", path)));
 
@@ -281,7 +277,7 @@ fn dictor(_py: Python,
 }
 
 
-fn find_occurences(py: Python, target: &str, searchable: &PyAny, default: Option<&str>, accumulator: &PyList){
+fn find_occurences(py: Python, target: &str, searchable: &PyAny, default: Option<&PyObject>, accumulator: &PyList){
     if searchable.is_instance_of::<PyList>(){
         let iter = searchable.iter().unwrap();
         for maybe_element in iter {
@@ -346,7 +342,10 @@ mod tests {
                 ('titanic', 'comedy', True), \
                 (None, 'comedy', None), \
             ]]", None, None).unwrap();
-            let res = dictor(py, list_dict, None, Some("pepe"),None, 
+            let default = PyString::new(py, "pepe");
+            let default = default.to_object(py);
+            let res: Result<Option<pyo3::prelude::Py<PyAny>>, PyErr> = dictor(py, list_dict, None,
+                 Some(default),None, 
                 None, None, Some("name".to_string()), None);
             let expected = PyList::new(py,vec!["spaceballs", "gone with the wind", "titanic", "pepe"]);
             let content = res.unwrap().unwrap();
@@ -393,9 +392,11 @@ mod tests {
                     }
                 ]
             }", None, None).unwrap();
+            let default = PyString::new(py, "pepe");
+            let default = default.to_object(py);
             let res = dictor(py, dict, 
                 Some("terminator.2.terminator 3.preview".to_owned()),
-                Some("pepe"),None, 
+                Some(default),None, 
                 None, None, None, None);
             let content = res.unwrap().unwrap();
             assert!(content.is_none(py))
@@ -495,7 +496,9 @@ mod tests {
             let vec_accumulator : Vec<PyString>= vec![];
             let base_list = PyList::new(py, elements);
             let accumulator = PyList::new(py, vec_accumulator);
-            find_occurences(py, "name", &base_list, Some("default"), accumulator);
+            let default = PyString::new(py, "default");
+            let default = default.to_object(py);
+            find_occurences(py, "name", &base_list, Some(&default), accumulator);
             let expected = PyList::new(py,vec!["pepe", "pipo", "popo", "papa", "default"]);
             assert!(accumulator.compare(expected).is_ok());
         });
@@ -624,9 +627,10 @@ mod tests {
             let dict2 = PyDict::new(py);
             dict2.set_item("aLGO", "found");
             dict.set_item("oTRo", dict2);
-            
+            let default = PyString::new(py, "replaced");
+            let default = default.to_object(py);
             let res = dictor(py, dict, Some("otro.nonexistent".to_string()),
-             Some("replaced"), None,Some(true), None, None, None);
+             Some(default), None,Some(true), None, None, None);
             assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
         });
     }
@@ -638,10 +642,15 @@ mod tests {
             let dict2 = PyDict::new(py);
             dict2.set_item("algo", "found");
             dict.set_item("otro", dict2);
-            
+            let default_vec: Vec<String> = Vec::new();
+            let default = PyList::new(py, default_vec);
+            let default = default.to_object(py);
             let res = dictor(py, dict, Some("otro.nonexistent".to_string()),
-             Some("replaced"), None,Some(true), None, None, None);
-            assert_eq!(res.unwrap().to_object(py).to_string(), "replaced".to_string());
+             Some(default), None,Some(true), None, None, None);
+            let content = res.unwrap().to_object(py);
+            let empty_list = content.downcast::<PyList>(py).unwrap();
+            let empty_list: Vec<String> = empty_list.extract().unwrap();
+            assert!(empty_list.is_empty())
         });
     }
 
